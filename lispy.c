@@ -34,8 +34,11 @@ lval* lval_read(mpc_ast_t* t);
 void lval_print_expr(lval* v, char open, char close);
 void lval_println(lval* v);
 void lval_print(lval* v);
-//lval eval(mpc_ast_t* t);
-//lval eval_op(lval x, char* op, lval y);
+lval* lval_eval_sexpr(lval* v);
+lval* lval_eval(lval* v);
+lval* lval_pop(lval* v, int i);
+lval* lval_take(lval* v, int i);
+lval* builtin_op(lval* v, char* op);
 
 int main(int argc, char** argv) {
 
@@ -68,7 +71,7 @@ int main(int argc, char** argv) {
 
         if(mpc_parse("<stdin>", input, Lispy, &r)) {
             /* On Success Print the Result */
-            lval* result = lval_read(r.output);
+            lval* result = lval_eval(lval_read(r.output));
             lval_println(result);
             lval_del(result);
 
@@ -232,52 +235,105 @@ void lval_print(lval* v) {
     }
 }
 
-/*
-   lval eval(mpc_ast_t* t) {
+lval* lval_eval_sexpr(lval* v) {
 
-   if(strstr(t->tag, "number")) {
-   errno = 0;
-   long x = strtol(t->contents, NULL, 10);
-   return errno != ERANGE ? lval_num(x) : lval_err(LERR_BAD_NUM);
-   }
+    for(int i = 0; i < v->count; i++) {
+        v->cell[i] = lval_eval(v->cell[i]);
+        if(v->cell[i]->type == LVAL_ERR) {
+            return lval_take(v, i);
+        }
+    }
 
-   char* op = t->children[1]->contents;
+    if(v->count == 0) {
+        return v;
+    }
 
-   lval x = eval(t->children[2]);
+    if(v->count == 1) {
+        return lval_take(v, 0);
+    }
 
-   int i = 3;
+    lval* x = lval_pop(v, 0);
 
-   while(strstr(t->children[i]->tag, "expr")) {
+    if(x->type != LVAL_SYM) {
+        lval_del(x);
+        lval_del(v);
+        return lval_err("S-Expression does not start with an operator");
+    }
 
-   x = eval_op(x, op, eval(t->children[i]));
-   ++i;
-   }
+    lval* result = builtin_op(v, x->sym);
+    lval_del(x);
+    return result;
 
-   return x;
-   }
+}
 
-   lval eval_op(lval x, char* op, lval y) {
+lval* lval_eval(lval* v) {
 
-   if(x.type == LVAL_ERR) {
-   return x;
-   }
-   if(y.type == LVAL_ERR) {
-   return y;
-   }
-   if(!strcmp(op, "+")) {
-   return lval_num(x.number + y.number);
-   }
-   else if(!strcmp(op, "-")) {
-   return lval_num(x.number - y.number);
-   }
-   else if(!strcmp(op, "*")) {
-   return lval_num(x.number * y.number);
-   }
-   else if(!strcmp(op, "/")) {
-   return y.number == 0 ? lval_err(LERR_DIV_ZERO) : lval_num(x.number / y.number);
-   }
+    if(v->type == LVAL_SEXPR) {
+        return lval_eval_sexpr(v);
+    }
+    return v;
+}
 
-   return lval_err(LERR_BAD_OP);
+lval* lval_pop(lval* v, int i) {
+    lval* x = v->cell[i];
 
-   }
-   */
+    memmove(&v->cell[i], &v->cell[i + 1], sizeof(lval*) * (v->count - i - 1));
+
+    v->count--;
+
+    v->cell = realloc(v->cell, sizeof(lval*) * v->count);
+    return x;
+
+}
+
+lval* lval_take(lval* v, int i) {
+    lval* x = lval_pop(v, i);
+    lval_del(v);
+    return x;
+}
+
+lval* builtin_op(lval* v, char* op) {
+
+    for(int i = 0; i < v->count; i++) {
+        if(v->cell[i]->type != LVAL_NUM) {
+            lval_del(v);
+            return lval_err("Cannot operate on non-numbers");
+        }
+    }
+
+    lval* x = lval_pop(v, 0);
+
+    if(strcmp(op, "-") == 0 && v->count == 0) {
+        x->number = -x->number;
+    }
+
+    while(v->count > 0) {
+
+        lval* y = lval_pop(v, 0);
+
+        if(strcmp(op, "+") == 0) {
+            x->number += y->number;
+        }
+        if(strcmp(op, "-") == 0) {
+            x->number -= y->number;
+        }
+        if(strcmp(op, "*") == 0) {
+            x->number *= y->number;
+        }
+        if(strcmp(op, "/") == 0) {
+            if(y->number == 0) {
+                lval_del(y);
+                lval_del(x);
+                lval* x = lval_err("Division with zero");
+                break;
+            }
+            x->number /= y->number;
+        }
+        lval_del(y);
+    }
+
+    lval_del(v);
+
+    return x;
+}
+
